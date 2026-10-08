@@ -8,24 +8,28 @@ import {
   getGitHubUser,
   getRepo,
   listRepos,
-  mergePullRequest,
   readFile
 } from "./github";
 
 import {
-  findAndReadFile,
-  findFiles
+  findAndReadFile
 } from "./file-finder";
 
 import { groqChat } from "./groq";
 
-const GITHUB_API = "https://api.github.com";
+const GITHUB_API =
+  "https://api.github.com";
 
 /*
  * ---------------------------------------------------------
  * TYPES
  * ---------------------------------------------------------
  */
+
+type ChatInputMessage = {
+  role: "user" | "assistant";
+  content?: string | null;
+};
 
 type AgentMessage = {
   role:
@@ -37,11 +41,6 @@ type AgentMessage = {
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;
-};
-
-type ChatInputMessage = {
-  role: "user" | "assistant";
-  content?: string | null;
 };
 
 /*
@@ -102,16 +101,30 @@ async function githubRequest(
   return data;
 }
 
+/*
+ * Connected GitHub account automatically
+ * determines the owner.
+ *
+ * Example:
+ * mbayejide-ops
+ */
+
 async function getOwner() {
   const user =
     await getGitHubUser();
+
+  if (!user?.login) {
+    throw new Error(
+      "Unable to detect the connected GitHub account."
+    );
+  }
 
   return user.login;
 }
 
 /*
  * ---------------------------------------------------------
- * TEXT PARSING
+ * TEXT HELPERS
  * ---------------------------------------------------------
  */
 
@@ -179,9 +192,24 @@ function isListRepos(
     ) ||
     value.includes(
       "all repos"
+    ) ||
+    value.includes(
+      "sob repo"
+    ) ||
+    value.includes(
+      "সব repo"
+    ) ||
+    value.includes(
+      "সব repository"
     )
   );
 }
+
+/*
+ * ---------------------------------------------------------
+ * REPOSITORY NAME EXTRACTION
+ * ---------------------------------------------------------
+ */
 
 function extractRepoName(
   text: string
@@ -208,15 +236,55 @@ function extractRepoName(
   return null;
 }
 
+/*
+ * ---------------------------------------------------------
+ * REPO + PATH EXTRACTION
+ * ---------------------------------------------------------
+ *
+ * Supports:
+ *
+ * Bayejid-pro repo theke bby.js
+ * Bayejid-pro repository theke bby.js
+ * Github theke Bayejid-pro repo theke bby.js
+ * Bayejid-pro থেকে bby.js
+ * Bayejid-pro repo te scripts/bby.js
+ *
+ * Returns:
+ *
+ * {
+ *   repo: "Bayejid-pro",
+ *   path: "bby.js"
+ * }
+ */
+
 function extractRepoAndPath(
   text: string
 ) {
   const patterns = [
-    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo(?:sitory)?\s+)?(?:theke|from)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
+    /*
+     * Github theke Bayejid-pro repo theke bby.js
+     */
+    /(?:github\s+theke\s+)?["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:theke|from|থেকে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
 
-    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo(?:sitory)?\s+)?(?:te|the)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
+    /*
+     * Bayejid-pro repo theke bby.js
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo(?:sitory)?)?\s*(?:theke|from|থেকে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
 
-    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+.*?["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i
+    /*
+     * Bayejid-pro repository theke bby.js
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:theke|from|থেকে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
+
+    /*
+     * repo Bayejid-pro theke bby.js
+     */
+    /(?:repo|repository)\s+["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:theke|from|থেকে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i,
+
+    /*
+     * Bayejid-pro repo te bby.js
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i
   ];
 
   for (
@@ -225,7 +293,10 @@ function extractRepoAndPath(
     const match =
       text.match(pattern);
 
-    if (match) {
+    if (
+      match?.[1] &&
+      match?.[2]
+    ) {
       return {
         repo: match[1],
         path: match[2]
@@ -235,6 +306,12 @@ function extractRepoAndPath(
 
   return null;
 }
+
+/*
+ * ---------------------------------------------------------
+ * FILE NAME EXTRACTION
+ * ---------------------------------------------------------
+ */
 
 function extractFileName(
   text: string
@@ -256,6 +333,12 @@ function extractFileName(
     );
 }
 
+/*
+ * ---------------------------------------------------------
+ * INTENT HELPERS
+ * ---------------------------------------------------------
+ */
+
 function wantsRead(
   text: string
 ) {
@@ -269,7 +352,12 @@ function wantsRead(
     value.includes("read") ||
     value.includes("dekhao") ||
     value.includes("দেখাও") ||
-    value.includes("fetch")
+    value.includes("fetch") ||
+    value.includes("pathao") ||
+    value.includes("পাঠাও") ||
+    value.includes("find") ||
+    value.includes("khuj") ||
+    value.includes("খুঁজ")
   );
 }
 
@@ -325,13 +413,12 @@ function hasConfirmation(
 }
 
 /*
- * FIX:
+ * ---------------------------------------------------------
+ * CONTENT EXTRACTION
+ * ---------------------------------------------------------
  *
- * Previous version used the RegExp /s flag.
- * Your tsconfig targets ES2017, so TypeScript
- * rejected that flag.
- *
- * [\s\S] works on all supported targets.
+ * Uses [\s\S] instead of the RegExp "s" flag
+ * so ES2017 TypeScript builds work.
  */
 
 function extractContent(
@@ -387,7 +474,7 @@ async function createFirstFile(
     "main";
 
   /*
-   * 1. Create blob
+   * Create blob
    */
 
   const blob =
@@ -411,7 +498,7 @@ async function createFirstFile(
     );
 
   /*
-   * 2. Create tree
+   * Create tree
    */
 
   const tree =
@@ -441,7 +528,7 @@ async function createFirstFile(
     );
 
   /*
-   * 3. Create first commit
+   * Create commit
    */
 
   const commit =
@@ -465,7 +552,7 @@ async function createFirstFile(
     );
 
   /*
-   * 4. Create branch reference
+   * Create first branch reference
    */
 
   const ref =
@@ -482,7 +569,8 @@ async function createFirstFile(
             "application/json"
         },
         body: JSON.stringify({
-          ref: `refs/heads/${branch}`,
+          ref:
+            `refs/heads/${branch}`,
           sha: commit.sha
         })
       }
@@ -497,7 +585,7 @@ async function createFirstFile(
 
 /*
  * ---------------------------------------------------------
- * SMART FILE CREATION
+ * SMART FILE WRITE
  * ---------------------------------------------------------
  */
 
@@ -515,13 +603,12 @@ async function createFileSmart(
     );
 
   /*
-   * IMPORTANT FIX:
+   * Empty repository:
    *
-   * Do NOT require default_branch to be empty.
-   * GitHub can report a default branch name even
-   * when the repository has no commits.
+   * GitHub may still expose a default branch
+   * name even though there are no commits.
    *
-   * Repository size 0 is the important check.
+   * Therefore size === 0 is used.
    */
 
   if (
@@ -549,7 +636,65 @@ async function createFileSmart(
 
 /*
  * ---------------------------------------------------------
- * DIRECT ACTIONS
+ * REPOSITORY-ONLY CONTEXT HELPERS
+ * ---------------------------------------------------------
+ */
+
+function isPossibleRepoName(
+  text: string
+) {
+  return /^[a-zA-Z0-9_.-]+$/.test(
+    text.trim()
+  );
+}
+
+function findPreviousFileRequest(
+  messages: ChatInputMessage[]
+) {
+  const reversed =
+    [...messages].reverse();
+
+  for (
+    const message of reversed
+  ) {
+    if (
+      message.role !== "user" ||
+      !message.content
+    ) {
+      continue;
+    }
+
+    const content =
+      message.content.trim();
+
+    const repoPath =
+      extractRepoAndPath(
+        content
+      );
+
+    if (repoPath) {
+      return repoPath;
+    }
+
+    const file =
+      extractFileName(
+        content
+      );
+
+    if (file) {
+      return {
+        repo: null,
+        path: file
+      };
+    }
+  }
+
+  return null;
+}
+
+/*
+ * ---------------------------------------------------------
+ * DIRECT ACTION ENGINE
  * ---------------------------------------------------------
  */
 
@@ -557,7 +702,8 @@ async function directAction(
   text: string
 ) {
   /*
-   * GREETING
+   * Greeting must be handled before
+   * any GitHub API request.
    */
 
   if (
@@ -570,11 +716,17 @@ async function directAction(
     };
   }
 
+  /*
+   * Owner is automatically detected.
+   */
+
   const owner =
     await getOwner();
 
   /*
+   * -------------------------------------------------------
    * LIST REPOSITORIES
+   * -------------------------------------------------------
    */
 
   if (
@@ -611,7 +763,9 @@ async function directAction(
   }
 
   /*
+   * -------------------------------------------------------
    * CREATE REPOSITORY
+   * -------------------------------------------------------
    */
 
   const newRepo =
@@ -634,7 +788,9 @@ async function directAction(
   }
 
   /*
-   * REPOSITORY + FILE
+   * -------------------------------------------------------
+   * REPO + FILE
+   * -------------------------------------------------------
    */
 
   const repoPath =
@@ -713,7 +869,7 @@ async function directAction(
     }
 
     /*
-     * READ FILE
+     * READ / FIND FILE
      */
 
     if (
@@ -763,10 +919,13 @@ async function directAction(
   }
 
   /*
-   * FILE SEARCH WITHOUT FULL PATH
+   * -------------------------------------------------------
+   * FILE SEARCH WITHOUT EXACT PATH
+   * -------------------------------------------------------
    *
    * Example:
-   * Bayejid-pro থেকে bby.js দাও
+   *
+   * Bayejid-pro repo theke bby.js dao
    */
 
   const fileName =
@@ -778,7 +937,7 @@ async function directAction(
   ) {
     const repoMatch =
       text.match(
-        /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:theke|from|repo|repository)/i
+        /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)?\s*(?:theke|from|থেকে)/i
       );
 
     if (
@@ -828,7 +987,9 @@ async function directAction(
   }
 
   /*
+   * -------------------------------------------------------
    * DELETE REPOSITORY
+   * -------------------------------------------------------
    */
 
   const deleteRepoMatch =
@@ -866,7 +1027,9 @@ async function directAction(
   }
 
   /*
+   * -------------------------------------------------------
    * CREATE BRANCH
+   * -------------------------------------------------------
    */
 
   const branchMatch =
@@ -973,7 +1136,7 @@ const aiTools = [
     function: {
       name: "update_file",
       description:
-        "Update a GitHub file after AI has generated/fixed its content.",
+        "Update a GitHub file after AI has generated or fixed its content.",
       parameters: {
         type: "object",
         properties: {
@@ -1144,21 +1307,26 @@ async function executeAiTool(
 
 /*
  * ---------------------------------------------------------
- * MAIN GITHUB AGENT
+ * MAIN AGENT
  * ---------------------------------------------------------
  */
 
 export async function runGitHubAgent(
   messages: ChatInputMessage[]
 ) {
+  const userMessages =
+    messages.filter(
+      (message) =>
+        message.role === "user" &&
+        Boolean(
+          message.content?.trim()
+        )
+    );
+
   const latest =
-    [...messages]
-      .reverse()
-      .find(
-        (message) =>
-          message.role ===
-          "user"
-      );
+    userMessages[
+      userMessages.length - 1
+    ];
 
   const text =
     latest?.content?.trim() ||
@@ -1173,19 +1341,78 @@ export async function runGitHubAgent(
   }
 
   /*
-   * Direct action first.
+   * -------------------------------------------------------
+   * DIRECT MULTI-TURN FILE CONTEXT
+   * -------------------------------------------------------
    *
-   * Simple requests such as:
-   * - Hi
+   * Example:
+   *
+   * User:
+   * Github theke Bayejid-pro repo theke bby.js dao
+   *
+   * This is handled immediately.
+   *
+   * Also supports:
+   *
+   * User:
+   * Bayejid-pro
+   *
+   * User:
+   * bby.js
+   */
+
+  let effectiveText =
+    text;
+
+  const previousRequest =
+    findPreviousFileRequest(
+      userMessages.slice(
+        0,
+        -1
+      )
+    );
+
+  /*
+   * Latest message is only a repo name.
+   *
+   * Example:
+   *
+   * Previous:
+   * bby.js dao
+   *
+   * Latest:
+   * Bayejid-pro
+   */
+
+  if (
+    isPossibleRepoName(text) &&
+    previousRequest?.path
+  ) {
+    effectiveText =
+      `${text} repo theke ${previousRequest.path} dao`;
+  }
+
+  /*
+   * -------------------------------------------------------
+   * DIRECT ACTION FIRST
+   * -------------------------------------------------------
+   *
+   * No Groq for:
+   *
+   * - greetings
    * - list repos
    * - create repo
-   * - read file
-   *
-   * will not consume Groq unnecessarily.
+   * - file search
+   * - file read
+   * - simple file write
+   * - simple deletion
+   * - branch creation
    */
 
   const direct =
-    await directAction(text);
+    await directAction(
+      effectiveText
+    );
 
   if (
     direct.handled
@@ -1203,7 +1430,7 @@ export async function runGitHubAgent(
 
   /*
    * -------------------------------------------------------
-   * COMPLEX REASONING
+   * GROQ REASONING
    * -------------------------------------------------------
    */
 
@@ -1233,6 +1460,8 @@ Rules:
 5. Keep responses concise.
 6. If a user asks for a simple file read, do not unnecessarily use AI.
 7. If a GitHub operation can be safely performed directly, use the provided tool.
+8. The connected GitHub owner can be discovered automatically.
+9. Never ask the user for the GitHub owner when the server can detect it.
 `
       },
       ...messages
@@ -1242,7 +1471,7 @@ Rules:
     false;
 
   /*
-   * Maximum 4 Groq reasoning rounds.
+   * Maximum 4 reasoning rounds.
    */
 
   for (
@@ -1267,9 +1496,7 @@ Rules:
     }
 
     /*
-     * FIX:
-     *
-     * AgentMessage allows tool_calls.
+     * Assistant tool-call message.
      */
 
     conversation.push({
@@ -1287,7 +1514,7 @@ Rules:
       [];
 
     /*
-     * No tool call means final AI response.
+     * Normal AI response.
      */
 
     if (!calls.length) {
@@ -1300,7 +1527,7 @@ Rules:
     }
 
     /*
-     * Execute every tool call.
+     * Execute tools.
      */
 
     for (
@@ -1335,13 +1562,6 @@ Rules:
           args
         );
 
-      /*
-       * FIX:
-       *
-       * AgentMessage allows role "tool",
-       * tool_call_id and name.
-       */
-
       conversation.push({
         role: "tool",
         tool_call_id:
@@ -1350,11 +1570,6 @@ Rules:
         content:
           JSON.stringify(result)
       });
-
-      /*
-       * If an AI tool updates a repository,
-       * tell the UI to refresh repository data.
-       */
 
       if (
         name === "update_file" ||
@@ -1373,4 +1588,4 @@ Rules:
       "The AI reached its reasoning limit. Please continue the task.",
     refreshRepos
   };
-      }
+}
