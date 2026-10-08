@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+
 import {
   createBranch,
   createOrUpdateFile,
@@ -11,13 +12,15 @@ import {
   mergePullRequest,
   readFile
 } from "@/lib/github";
-import { openRouterChat } from "@/lib/openrouter";
+
+import { groqChat } from "@/lib/groq";
 
 type ChatMessage = {
-  role: "user" | "assistant" | "tool";
-  content?: string;
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string | null;
   tool_calls?: any[];
   tool_call_id?: string;
+  name?: string;
 };
 
 const tools = [
@@ -25,7 +28,8 @@ const tools = [
     type: "function",
     function: {
       name: "list_repositories",
-      description: "List repositories accessible by the configured GitHub token.",
+      description:
+        "List all GitHub repositories accessible by the configured GitHub token.",
       parameters: {
         type: "object",
         properties: {},
@@ -33,55 +37,90 @@ const tools = [
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "get_repository",
-      description: "Get details about a GitHub repository.",
+      description:
+        "Get information about a specific GitHub repository.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" }
+          owner: {
+            type: "string",
+            description: "GitHub username or organization"
+          },
+          repo: {
+            type: "string",
+            description: "Repository name"
+          }
         },
         required: ["owner", "repo"],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a file from a GitHub repository.",
+      description:
+        "Read the contents of a file from a GitHub repository.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          path: { type: "string" },
-          ref: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          path: {
+            type: "string",
+            description: "Path of the file"
+          },
+          ref: {
+            type: "string",
+            description:
+              "Optional branch, tag, or commit SHA"
+          }
         },
         required: ["owner", "repo", "path"],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "create_or_update_file",
       description:
-        "Create a new file or replace an existing file and commit the change.",
+        "Create a new file or update an existing file in a GitHub repository and commit the change.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          path: { type: "string" },
-          content: { type: "string" },
-          message: { type: "string" },
-          branch: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          path: {
+            type: "string"
+          },
+          content: {
+            type: "string"
+          },
+          message: {
+            type: "string",
+            description: "Git commit message"
+          },
+          branch: {
+            type: "string"
+          }
         },
         required: [
           "owner",
@@ -94,107 +133,181 @@ const tools = [
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "delete_file",
-      description: "Delete a file from a repository.",
+      description:
+        "Delete a file from a GitHub repository and create a commit.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          path: { type: "string" },
-          message: { type: "string" },
-          branch: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          path: {
+            type: "string"
+          },
+          message: {
+            type: "string"
+          },
+          branch: {
+            type: "string"
+          }
         },
-        required: ["owner", "repo", "path", "message"],
+        required: [
+          "owner",
+          "repo",
+          "path",
+          "message"
+        ],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "create_repository",
-      description: "Create a new GitHub repository.",
+      description:
+        "Create a new GitHub repository.",
       parameters: {
         type: "object",
         properties: {
-          name: { type: "string" },
-          description: { type: "string" },
-          isPrivate: { type: "boolean" }
+          name: {
+            type: "string"
+          },
+          description: {
+            type: "string"
+          },
+          isPrivate: {
+            type: "boolean"
+          }
         },
         required: ["name"],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "create_branch",
-      description: "Create a new branch from another branch.",
+      description:
+        "Create a new branch from an existing branch.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          branch: { type: "string" },
-          from: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          branch: {
+            type: "string"
+          },
+          from: {
+            type: "string"
+          }
         },
-        required: ["owner", "repo", "branch", "from"],
+        required: [
+          "owner",
+          "repo",
+          "branch",
+          "from"
+        ],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "create_pull_request",
-      description: "Create a pull request.",
+      description:
+        "Create a GitHub pull request.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          title: { type: "string" },
-          head: { type: "string" },
-          base: { type: "string" },
-          body: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          title: {
+            type: "string"
+          },
+          head: {
+            type: "string"
+          },
+          base: {
+            type: "string"
+          },
+          body: {
+            type: "string"
+          }
         },
-        required: ["owner", "repo", "title", "head", "base"],
+        required: [
+          "owner",
+          "repo",
+          "title",
+          "head",
+          "base"
+        ],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "merge_pull_request",
-      description: "Merge a pull request.",
+      description:
+        "Merge an existing GitHub pull request.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" },
-          number: { type: "number" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          number: {
+            type: "number"
+          }
         },
         required: ["owner", "repo", "number"],
         additionalProperties: false
       }
     }
   },
+
   {
     type: "function",
     function: {
       name: "delete_repository",
-      description: "Delete an entire GitHub repository.",
+      description:
+        "Delete an entire GitHub repository.",
       parameters: {
         type: "object",
         properties: {
-          owner: { type: "string" },
-          repo: { type: "string" }
+          owner: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          }
         },
         required: ["owner", "repo"],
         additionalProperties: false
@@ -214,7 +327,10 @@ function hasConfirmation(messages: ChatMessage[]) {
     .reverse()
     .find((message) => message.role === "user");
 
-  const text = latestUserMessage?.content?.toUpperCase() || "";
+  const text =
+    typeof latestUserMessage?.content === "string"
+      ? latestUserMessage.content.toUpperCase()
+      : "";
 
   return (
     text.includes("CONFIRM") ||
@@ -227,11 +343,14 @@ async function executeTool(
   args: Record<string, any>,
   messages: ChatMessage[]
 ) {
-  if (destructiveTools.has(name) && !hasConfirmation(messages)) {
+  if (
+    destructiveTools.has(name) &&
+    !hasConfirmation(messages)
+  ) {
     return {
       confirmation_required: true,
       message:
-        "This is a destructive action. Ask the user to explicitly confirm before executing it."
+        "This is a destructive action. Explicit user confirmation is required before executing it."
     };
   }
 
@@ -240,7 +359,10 @@ async function executeTool(
       return await listRepos();
 
     case "get_repository":
-      return await getRepo(args.owner, args.repo);
+      return await getRepo(
+        args.owner,
+        args.repo
+      );
 
     case "read_file":
       return await readFile(
@@ -302,10 +424,15 @@ async function executeTool(
       );
 
     case "delete_repository":
-      return await deleteRepo(args.owner, args.repo);
+      return await deleteRepo(
+        args.owner,
+        args.repo
+      );
 
     default:
-      throw new Error(`Unknown tool: ${name}`);
+      throw new Error(
+        `Unknown tool: ${name}`
+      );
   }
 }
 
@@ -313,23 +440,44 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
 
-    const userMessages: ChatMessage[] = body.messages || [];
+    const userMessages: ChatMessage[] =
+      Array.isArray(body.messages)
+        ? body.messages
+        : [];
+
+    if (userMessages.length === 0) {
+      return NextResponse.json(
+        {
+          error: "No messages provided."
+        },
+        {
+          status: 400
+        }
+      );
+    }
 
     const systemMessage: ChatMessage = {
-      role: "system" as any,
+      role: "system",
       content: `
 You are GitHub AI Manager.
 
-You manage GitHub repositories through tools.
+You control GitHub through the provided tools.
 
-Rules:
-- Understand the user's natural-language request.
-- Use tools when an actual GitHub action is required.
-- Never pretend an action succeeded if the tool did not succeed.
-- Before editing a file, read it when necessary to avoid accidentally destroying existing content.
-- Keep responses concise but explain what was done.
-- If the user selected a repository in the UI, prefer that repository when appropriate.
-- For destructive operations, the server requires explicit confirmation.
+Your responsibilities:
+- Understand natural-language GitHub requests.
+- Use the appropriate GitHub tool when an actual action is requested.
+- Never claim an action succeeded unless the tool actually succeeded.
+- Read existing files before modifying them when necessary.
+- Preserve existing code unless the user specifically asks to replace it.
+- When creating or updating files, produce complete valid file content.
+- Keep the final response concise and clearly state what happened.
+- If a repository is selected by the UI, prefer that repository when appropriate.
+
+Safety rules:
+- Never delete a repository without explicit confirmation.
+- Never delete a file without explicit confirmation.
+- Never merge a pull request without explicit confirmation.
+- If confirmation is required, clearly tell the user what action needs confirmation.
 `
     };
 
@@ -340,49 +488,81 @@ Rules:
 
     let refreshRepos = false;
 
-    for (let step = 0; step < 6; step++) {
-      const response = await openRouterChat(
+    /*
+     * Agent/tool loop.
+     *
+     * The model can:
+     * 1. Ask for a tool
+     * 2. Our server executes the tool
+     * 3. Tool result goes back to Groq
+     * 4. Groq can request another tool
+     * 5. Eventually Groq returns the final answer
+     */
+    for (let step = 0; step < 8; step++) {
+      const response = await groqChat(
         conversation,
         tools
       );
 
-      const assistantMessage = response.choices?.[0]?.message;
+      const assistantMessage =
+        response?.choices?.[0]?.message;
 
       if (!assistantMessage) {
-        throw new Error("OpenRouter returned no message.");
+        throw new Error(
+          "Groq returned an empty response."
+        );
       }
 
-      conversation.push(assistantMessage);
+      conversation.push({
+        role: "assistant",
+        content:
+          assistantMessage.content || null,
+        tool_calls:
+          assistantMessage.tool_calls || undefined
+      });
 
-      const toolCalls = assistantMessage.tool_calls || [];
+      const toolCalls =
+        assistantMessage.tool_calls || [];
 
       if (toolCalls.length === 0) {
         return NextResponse.json({
-          message: assistantMessage.content || "Done.",
+          message:
+            assistantMessage.content ||
+            "Done.",
           refreshRepos
         });
       }
 
       for (const toolCall of toolCalls) {
-        const name = toolCall.function.name;
+        const toolName =
+          toolCall?.function?.name;
+
+        if (!toolName) {
+          continue;
+        }
 
         let args: Record<string, any> = {};
 
         try {
-          args = JSON.parse(toolCall.function.arguments || "{}");
+          args = JSON.parse(
+            toolCall.function.arguments || "{}"
+          );
         } catch {
-          args = {};
+          throw new Error(
+            `Invalid tool arguments returned for ${toolName}.`
+          );
         }
 
-        const result = await executeTool(
-          name,
-          args,
-          userMessages
-        );
+        const result =
+          await executeTool(
+            toolName,
+            args,
+            userMessages
+          );
 
         if (
-          name === "create_repository" ||
-          name === "delete_repository"
+          toolName === "create_repository" ||
+          toolName === "delete_repository"
         ) {
           refreshRepos = true;
         }
@@ -390,6 +570,7 @@ Rules:
         conversation.push({
           role: "tool",
           tool_call_id: toolCall.id,
+          name: toolName,
           content: JSON.stringify(result)
         });
       }
@@ -397,22 +578,25 @@ Rules:
 
     return NextResponse.json({
       message:
-        "The operation reached the maximum tool steps. Please check the repository state before continuing.",
+        "The AI reached the maximum number of tool operations. Please check the GitHub repository state and continue if needed.",
       refreshRepos
     });
   } catch (error) {
-    console.error("Chat API error:", error);
+    console.error(
+      "GitHub AI Manager error:",
+      error
+    );
 
     return NextResponse.json(
       {
         error:
           error instanceof Error
             ? error.message
-            : "Unexpected server error"
+            : "Unexpected server error."
       },
       {
         status: 500
       }
     );
   }
-}
+          }
