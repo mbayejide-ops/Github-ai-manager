@@ -21,8 +21,38 @@ import { groqChat } from "./groq";
 
 const GITHUB_API = "https://api.github.com";
 
+/*
+ * ---------------------------------------------------------
+ * TYPES
+ * ---------------------------------------------------------
+ */
+
+type AgentMessage = {
+  role:
+    | "system"
+    | "user"
+    | "assistant"
+    | "tool";
+  content?: string | null;
+  tool_calls?: any[];
+  tool_call_id?: string;
+  name?: string;
+};
+
+type ChatInputMessage = {
+  role: "user" | "assistant";
+  content?: string | null;
+};
+
+/*
+ * ---------------------------------------------------------
+ * GITHUB HELPERS
+ * ---------------------------------------------------------
+ */
+
 function githubToken() {
-  const token = process.env.GITHUB_TOKEN?.trim();
+  const token =
+    process.env.GITHUB_TOKEN?.trim();
 
   if (!token) {
     throw new Error(
@@ -37,22 +67,23 @@ async function githubRequest(
   path: string,
   init: RequestInit = {}
 ) {
-  const response = await fetch(
-    `${GITHUB_API}${path}`,
-    {
-      ...init,
-      headers: {
-        Accept:
-          "application/vnd.github+json",
-        Authorization:
-          `Bearer ${githubToken()}`,
-        "X-GitHub-Api-Version":
-          "2022-11-28",
-        ...(init.headers || {})
-      },
-      cache: "no-store"
-    }
-  );
+  const response =
+    await fetch(
+      `${GITHUB_API}${path}`,
+      {
+        ...init,
+        headers: {
+          Accept:
+            "application/vnd.github+json",
+          Authorization:
+            `Bearer ${githubToken()}`,
+          "X-GitHub-Api-Version":
+            "2022-11-28",
+          ...(init.headers || {})
+        },
+        cache: "no-store"
+      }
+    );
 
   const data =
     await response.json().catch(
@@ -78,16 +109,33 @@ async function getOwner() {
   return user.login;
 }
 
-function normalize(text: string) {
+/*
+ * ---------------------------------------------------------
+ * TEXT PARSING
+ * ---------------------------------------------------------
+ */
+
+function normalize(
+  text: string
+) {
   return text
     .toLowerCase()
-    .replace(/[“”"'`]/g, "")
-    .replace(/\s+/g, " ")
+    .replace(
+      /[“”"'`]/g,
+      ""
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
     .trim();
 }
 
-function isGreeting(text: string) {
-  const value = normalize(text);
+function isGreeting(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return [
     "hi",
@@ -110,21 +158,34 @@ function isGreeting(text: string) {
   ].includes(value);
 }
 
-function isListRepos(text: string) {
-  const value = normalize(text);
+function isListRepos(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return (
     /^(show|list|get)\s+(my\s+)?(repos?|repositories)/i.test(
       value
     ) ||
-    value.includes("repo gula dekhao") ||
-    value.includes("repository gula dekhao") ||
-    value.includes("amar repo dekhao") ||
-    value.includes("all repos")
+    value.includes(
+      "repo gula dekhao"
+    ) ||
+    value.includes(
+      "repository gula dekhao"
+    ) ||
+    value.includes(
+      "amar repo dekhao"
+    ) ||
+    value.includes(
+      "all repos"
+    )
   );
 }
 
-function extractRepoName(text: string) {
+function extractRepoName(
+  text: string
+) {
   const patterns = [
     /(?:new|create|make)\s+(?:a\s+)?repo(?:sitory)?\s+(?:named\s+|name\s+)?["'`]?([a-zA-Z0-9_.-]+)["'`]?/i,
 
@@ -133,7 +194,9 @@ function extractRepoName(text: string) {
     /(?:new\s+repo|repo\s+banao).*?\b(?:name\s+diye|name\s+is|named)\s+["'`]?([a-zA-Z0-9_.-]+)["'`]?/i
   ];
 
-  for (const pattern of patterns) {
+  for (
+    const pattern of patterns
+  ) {
     const match =
       text.match(pattern);
 
@@ -156,7 +219,9 @@ function extractRepoAndPath(
     /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+.*?["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i
   ];
 
-  for (const pattern of patterns) {
+  for (
+    const pattern of patterns
+  ) {
     const match =
       text.match(pattern);
 
@@ -174,9 +239,10 @@ function extractRepoAndPath(
 function extractFileName(
   text: string
 ) {
-  const matches = text.match(
-    /(?:^|[\s"'`])([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*\.[a-zA-Z0-9_-]+)(?=$|[\s"'`])/g
-  );
+  const matches =
+    text.match(
+      /(?:^|[\s"'`])([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*\.[a-zA-Z0-9_-]+)(?=$|[\s"'`])/g
+    );
 
   if (!matches?.length) {
     return null;
@@ -190,8 +256,11 @@ function extractFileName(
     );
 }
 
-function wantsRead(text: string) {
-  const value = normalize(text);
+function wantsRead(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return (
     value.includes("dao") ||
@@ -204,8 +273,11 @@ function wantsRead(text: string) {
   );
 }
 
-function wantsDelete(text: string) {
-  const value = normalize(text);
+function wantsDelete(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return (
     value.includes("delete") ||
@@ -215,8 +287,11 @@ function wantsDelete(text: string) {
   );
 }
 
-function wantsWrite(text: string) {
-  const value = normalize(text);
+function wantsWrite(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return (
     value.includes("add") ||
@@ -230,31 +305,57 @@ function wantsWrite(text: string) {
   );
 }
 
-function hasConfirmation(text: string) {
-  const value = normalize(text);
+function hasConfirmation(
+  text: string
+) {
+  const value =
+    normalize(text);
 
   return (
     value.includes("confirm") ||
     value.includes("i confirm") ||
     value.includes("yes delete") ||
-    value.includes("হ্যাঁ delete") ||
-    value.includes("হ্যাঁ ডিলিট")
+    value.includes(
+      "হ্যাঁ delete"
+    ) ||
+    value.includes(
+      "হ্যাঁ ডিলিট"
+    )
   );
 }
 
-function extractContent(text: string) {
+/*
+ * FIX:
+ *
+ * Previous version used the RegExp /s flag.
+ * Your tsconfig targets ES2017, so TypeScript
+ * rejected that flag.
+ *
+ * [\s\S] works on all supported targets.
+ */
+
+function extractContent(
+  text: string
+) {
   const patterns = [
-    /\s+-\s+(.+)$/s,
-    /\s+content\s*[:=]\s*(.+)$/is,
-    /\s+with\s+content\s+(.+)$/is,
-    /\s+containing\s+(.+)$/is
+    /\s+-\s+([\s\S]+)$/,
+
+    /\s+content\s*[:=]\s*([\s\S]+)$/i,
+
+    /\s+with\s+content\s+([\s\S]+)$/i,
+
+    /\s+containing\s+([\s\S]+)$/i
   ];
 
-  for (const pattern of patterns) {
+  for (
+    const pattern of patterns
+  ) {
     const match =
       text.match(pattern);
 
-    if (match?.[1]?.trim()) {
+    if (
+      match?.[1]?.trim()
+    ) {
       return match[1].trim();
     }
   }
@@ -262,11 +363,12 @@ function extractContent(text: string) {
   return null;
 }
 
-/**
- * Create the first commit in a completely empty repository.
- *
- * This bypasses the Contents API limitation for an empty repo.
+/*
+ * ---------------------------------------------------------
+ * EMPTY REPOSITORY FIRST COMMIT
+ * ---------------------------------------------------------
  */
+
 async function createFirstFile(
   owner: string,
   repo: string,
@@ -275,11 +377,18 @@ async function createFirstFile(
   message: string
 ) {
   const repository =
-    await getRepo(owner, repo);
+    await getRepo(
+      owner,
+      repo
+    );
 
   const branch =
     repository.default_branch ||
     "main";
+
+  /*
+   * 1. Create blob
+   */
 
   const blob =
     await githubRequest(
@@ -300,6 +409,10 @@ async function createFirstFile(
         })
       }
     );
+
+  /*
+   * 2. Create tree
+   */
 
   const tree =
     await githubRequest(
@@ -327,6 +440,10 @@ async function createFirstFile(
       }
     );
 
+  /*
+   * 3. Create first commit
+   */
+
   const commit =
     await githubRequest(
       `/repos/${encodeURIComponent(
@@ -346,6 +463,10 @@ async function createFirstFile(
         })
       }
     );
+
+  /*
+   * 4. Create branch reference
+   */
 
   const ref =
     await githubRequest(
@@ -374,6 +495,12 @@ async function createFirstFile(
   };
 }
 
+/*
+ * ---------------------------------------------------------
+ * SMART FILE CREATION
+ * ---------------------------------------------------------
+ */
+
 async function createFileSmart(
   owner: string,
   repo: string,
@@ -382,15 +509,25 @@ async function createFileSmart(
   message: string
 ) {
   const repository =
-    await getRepo(owner, repo);
+    await getRepo(
+      owner,
+      repo
+    );
 
   /*
-   * A completely empty GitHub repository has no
-   * default branch and size is normally 0.
+   * IMPORTANT FIX:
+   *
+   * Do NOT require default_branch to be empty.
+   * GitHub can report a default branch name even
+   * when the repository has no commits.
+   *
+   * Repository size 0 is the important check.
    */
+
   if (
-    !repository.default_branch &&
-    Number(repository.size || 0) === 0
+    Number(
+      repository.size || 0
+    ) === 0
   ) {
     return createFirstFile(
       owner,
@@ -410,10 +547,22 @@ async function createFileSmart(
   );
 }
 
+/*
+ * ---------------------------------------------------------
+ * DIRECT ACTIONS
+ * ---------------------------------------------------------
+ */
+
 async function directAction(
   text: string
 ) {
-  if (isGreeting(text)) {
+  /*
+   * GREETING
+   */
+
+  if (
+    isGreeting(text)
+  ) {
     return {
       handled: true,
       message:
@@ -428,7 +577,9 @@ async function directAction(
    * LIST REPOSITORIES
    */
 
-  if (isListRepos(text)) {
+  if (
+    isListRepos(text)
+  ) {
     const repos =
       await listRepos();
 
@@ -625,15 +776,14 @@ async function directAction(
     fileName &&
     wantsRead(text)
   ) {
-    /*
-     * Try to determine repository from text.
-     */
     const repoMatch =
       text.match(
         /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:theke|from|repo|repository)/i
       );
 
-    if (repoMatch?.[1]) {
+    if (
+      repoMatch?.[1]
+    ) {
       const repo =
         repoMatch[1];
 
@@ -932,6 +1082,12 @@ const aiTools = [
   }
 ];
 
+/*
+ * ---------------------------------------------------------
+ * AI TOOL EXECUTION
+ * ---------------------------------------------------------
+ */
+
 async function executeAiTool(
   name: string,
   args: Record<string, any>
@@ -986,22 +1142,27 @@ async function executeAiTool(
   }
 }
 
+/*
+ * ---------------------------------------------------------
+ * MAIN GITHUB AGENT
+ * ---------------------------------------------------------
+ */
+
 export async function runGitHubAgent(
-  messages: {
-    role: "user" | "assistant";
-    content?: string | null;
-  }[]
+  messages: ChatInputMessage[]
 ) {
   const latest =
     [...messages]
       .reverse()
       .find(
         (message) =>
-          message.role === "user"
+          message.role ===
+          "user"
       );
 
   const text =
-    latest?.content?.trim() || "";
+    latest?.content?.trim() ||
+    "";
 
   if (!text) {
     return {
@@ -1012,38 +1173,44 @@ export async function runGitHubAgent(
   }
 
   /*
-   * IMPORTANT:
+   * Direct action first.
    *
-   * Direct action is ALWAYS attempted first.
+   * Simple requests such as:
+   * - Hi
+   * - list repos
+   * - create repo
+   * - read file
    *
-   * Therefore:
-   *
-   * "Hi"
-   * "list repos"
-   * "Bayejid-pro থেকে bby.js দাও"
-   *
-   * do NOT unnecessarily call Groq.
+   * will not consume Groq unnecessarily.
    */
+
   const direct =
     await directAction(text);
 
-  if (direct.handled) {
+  if (
+    direct.handled
+  ) {
     return {
       message:
-        direct.message || "Done.",
+        direct.message ||
+        "Done.",
       refreshRepos:
-        Boolean(direct.refreshRepos)
+        Boolean(
+          direct.refreshRepos
+        )
     };
   }
 
   /*
-   * Complex reasoning starts here.
+   * -------------------------------------------------------
+   * COMPLEX REASONING
+   * -------------------------------------------------------
    */
 
-  const conversation =
-    [
+  const conversation:
+    AgentMessage[] = [
       {
-        role: "system" as const,
+        role: "system",
         content: `
 You are an advanced GitHub Manager AI.
 
@@ -1066,13 +1233,17 @@ Rules:
 5. Keep responses concise.
 6. If a user asks for a simple file read, do not unnecessarily use AI.
 7. If a GitHub operation can be safely performed directly, use the provided tool.
-`,
+`
       },
       ...messages
     ];
 
   let refreshRepos =
     false;
+
+  /*
+   * Maximum 4 Groq reasoning rounds.
+   */
 
   for (
     let step = 0;
@@ -1086,7 +1257,8 @@ Rules:
       );
 
     const assistant =
-      response?.choices?.[0]?.message;
+      response?.choices?.[0]
+        ?.message;
 
     if (!assistant) {
       throw new Error(
@@ -1094,17 +1266,29 @@ Rules:
       );
     }
 
+    /*
+     * FIX:
+     *
+     * AgentMessage allows tool_calls.
+     */
+
     conversation.push({
       role: "assistant",
       content:
-        assistant.content || null,
+        assistant.content ||
+        null,
       tool_calls:
         assistant.tool_calls ||
         undefined
     });
 
     const calls =
-      assistant.tool_calls || [];
+      assistant.tool_calls ||
+      [];
+
+    /*
+     * No tool call means final AI response.
+     */
 
     if (!calls.length) {
       return {
@@ -1114,6 +1298,10 @@ Rules:
         refreshRepos
       };
     }
+
+    /*
+     * Execute every tool call.
+     */
 
     for (
       const call of calls
@@ -1129,10 +1317,12 @@ Rules:
         Record<string, any>;
 
       try {
-        args = JSON.parse(
-          call.function.arguments ||
-            "{}"
-        );
+        args =
+          JSON.parse(
+            call.function
+              .arguments ||
+              "{}"
+          );
       } catch {
         throw new Error(
           `Invalid arguments for ${name}.`
@@ -1145,6 +1335,13 @@ Rules:
           args
         );
 
+      /*
+       * FIX:
+       *
+       * AgentMessage allows role "tool",
+       * tool_call_id and name.
+       */
+
       conversation.push({
         role: "tool",
         tool_call_id:
@@ -1153,6 +1350,21 @@ Rules:
         content:
           JSON.stringify(result)
       });
+
+      /*
+       * If an AI tool updates a repository,
+       * tell the UI to refresh repository data.
+       */
+
+      if (
+        name === "update_file" ||
+        name === "create_branch" ||
+        name ===
+          "create_pull_request"
+      ) {
+        refreshRepos =
+          true;
+      }
     }
   }
 
@@ -1161,4 +1373,4 @@ Rules:
       "The AI reached its reasoning limit. Please continue the task.",
     refreshRepos
   };
-    }
+      }
