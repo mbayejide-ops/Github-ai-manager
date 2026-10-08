@@ -21,9 +21,9 @@ const GITHUB_API =
   "https://api.github.com";
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * TYPES
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 type ChatInputMessage = {
@@ -44,9 +44,9 @@ type AgentMessage = {
 };
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * GITHUB HELPERS
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 function githubToken() {
@@ -101,14 +101,6 @@ async function githubRequest(
   return data;
 }
 
-/*
- * Connected GitHub account automatically
- * determines the owner.
- *
- * Example:
- * mbayejide-ops
- */
-
 async function getOwner() {
   const user =
     await getGitHubUser();
@@ -123,9 +115,9 @@ async function getOwner() {
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * TEXT HELPERS
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 function normalize(
@@ -142,6 +134,89 @@ function normalize(
       " "
     )
     .trim();
+}
+
+/*
+ * Remove fenced code blocks before simple
+ * natural-language command parsing.
+ *
+ * This is important because users may send:
+ *
+ * ```ts
+ * Bayejid-pro repo theke bby.js
+ * ```
+ *
+ * That text must NOT become an actual GitHub command.
+ */
+
+function stripCodeBlocks(
+  text: string
+) {
+  return text
+    .replace(
+      /```[\s\S]*?```/g,
+      " "
+    )
+    .trim();
+}
+
+/*
+ * Detect requests that are actually asking
+ * the AI to modify source code.
+ *
+ * These MUST NOT go through simple direct
+ * file add/update parsing.
+ */
+
+function isCodeEditRequest(
+  text: string
+) {
+  const value =
+    normalize(
+      stripCodeBlocks(text)
+    );
+
+  const hasCodeTarget =
+    /(?:function|code|section|part|file|github-agent\.ts|\.ts|\.js|\.tsx|\.jsx|অংশ)/i.test(
+      value
+    );
+
+  const hasEditLanguage =
+    /(?:replace|modify|change|edit|refactor|update|fix|rewrite|পরিবর্তন|বদল|ঠিক কর|replace করে|পুরো replace)/i.test(
+      value
+    );
+
+  /*
+   * Strong explicit development wording.
+   */
+  if (
+    hasCodeTarget &&
+    hasEditLanguage
+  ) {
+    return true;
+  }
+
+  if (
+    value.includes(
+      "এই function"
+    ) ||
+    value.includes(
+      "এই অংশটা"
+    ) ||
+    value.includes(
+      "current function"
+    ) ||
+    value.includes(
+      "function er pore"
+    ) ||
+    value.includes(
+      "function-এর পরে"
+    )
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function isGreeting(
@@ -206,14 +281,17 @@ function isListRepos(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * REPOSITORY NAME EXTRACTION
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 function extractRepoName(
   text: string
 ) {
+  const clean =
+    stripCodeBlocks(text);
+
   const patterns = [
     /(?:new|create|make)\s+(?:a\s+)?repo(?:sitory)?\s+(?:named\s+|name\s+)?["'`]?([a-zA-Z0-9_.-]+)["'`]?/i,
 
@@ -226,7 +304,7 @@ function extractRepoName(
     const pattern of patterns
   ) {
     const match =
-      text.match(pattern);
+      clean.match(pattern);
 
     if (match?.[1]) {
       return match[1];
@@ -237,29 +315,31 @@ function extractRepoName(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * REPO + PATH EXTRACTION
- * ---------------------------------------------------------
+ * =========================================================
  *
- * Supports:
+ * Supported:
  *
  * Bayejid-pro repo theke bby.js
  * Bayejid-pro repository theke bby.js
  * Github theke Bayejid-pro repo theke bby.js
- * Bayejid-pro থেকে bby.js
+ * Bayejid-pro repository থেকে bby.js
+ * repo Bayejid-pro থেকে bby.js
  * Bayejid-pro repo te scripts/bby.js
  *
- * Returns:
- *
- * {
- *   repo: "Bayejid-pro",
- *   path: "bby.js"
- * }
+ * IMPORTANT:
+ * This parser is only used for simple GitHub
+ * operations. Code-edit requests are filtered
+ * before directAction().
  */
 
 function extractRepoAndPath(
   text: string
 ) {
+  const clean =
+    stripCodeBlocks(text);
+
   const patterns = [
     /*
      * Github theke Bayejid-pro repo theke bby.js
@@ -284,14 +364,14 @@ function extractRepoAndPath(
     /*
      * Bayejid-pro repo te bby.js
      */
-    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in|তে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?/i
   ];
 
   for (
     const pattern of patterns
   ) {
     const match =
-      text.match(pattern);
+      clean.match(pattern);
 
     if (
       match?.[1] &&
@@ -308,16 +388,78 @@ function extractRepoAndPath(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
+ * CREATE FILE REQUEST
+ * =========================================================
+ *
+ * Examples:
+ *
+ * Banao repository te new file banao games.js name er - //games Example
+ *
+ * Banao repo te games.js add koro - hello
+ *
+ * Banao repository te new file create games.js - test
+ */
+
+function extractCreateFileRequest(
+  text: string
+) {
+  const clean =
+    stripCodeBlocks(text);
+
+  const patterns = [
+    /*
+     * Banao repository te new file banao games.js name er - content
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in|তে)\s+(?:a\s+|new\s+)?file\s+(?:banao|create|make|add|বানাও|করো)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?(?:\s+(?:name\s+er|named|name)\s*)?(?:-|:)\s*([\s\S]+)$/i,
+
+    /*
+     * Banao repository te games.js add koro - content
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in|তে)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?\s+(?:add|create|make|banao|বানাও|যোগ)\s+(?:koro|করো)?\s*(?:-|:)\s*([\s\S]+)$/i,
+
+    /*
+     * Banao repo te new file banao games.js - content
+     */
+    /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)\s+(?:te|in|তে)\s+(?:new\s+)?file\s+(?:banao|create|make)\s+["'`]?([a-zA-Z0-9_.\/-]+\.[a-zA-Z0-9_-]+)["'`]?.*?(?:-|:)\s*([\s\S]+)$/i
+  ];
+
+  for (
+    const pattern of patterns
+  ) {
+    const match =
+      clean.match(pattern);
+
+    if (
+      match?.[1] &&
+      match?.[2]
+    ) {
+      return {
+        repo: match[1],
+        path: match[2],
+        content:
+          match[3]?.trim() || ""
+      };
+    }
+  }
+
+  return null;
+}
+
+/*
+ * =========================================================
  * FILE NAME EXTRACTION
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 function extractFileName(
   text: string
 ) {
+  const clean =
+    stripCodeBlocks(text);
+
   const matches =
-    text.match(
+    clean.match(
       /(?:^|[\s"'`])([a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*\.[a-zA-Z0-9_-]+)(?=$|[\s"'`])/g
     );
 
@@ -334,29 +476,26 @@ function extractFileName(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * INTENT HELPERS
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 function wantsRead(
   text: string
 ) {
   const value =
-    normalize(text);
+    normalize(
+      stripCodeBlocks(text)
+    );
 
   return (
-    value.includes("dao") ||
+    /\b(?:dao|show|read|dekhao|fetch|pathao|find|khuj)\b/i.test(
+      value
+    ) ||
     value.includes("দাও") ||
-    value.includes("show") ||
-    value.includes("read") ||
-    value.includes("dekhao") ||
     value.includes("দেখাও") ||
-    value.includes("fetch") ||
-    value.includes("pathao") ||
     value.includes("পাঠাও") ||
-    value.includes("find") ||
-    value.includes("khuj") ||
     value.includes("খুঁজ")
   );
 }
@@ -365,31 +504,53 @@ function wantsDelete(
   text: string
 ) {
   const value =
-    normalize(text);
+    normalize(
+      stripCodeBlocks(text)
+    );
 
   return (
-    value.includes("delete") ||
-    value.includes("remove") ||
+    /\b(?:delete|remove)\b/i.test(
+      value
+    ) ||
     value.includes("ডিলিট") ||
     value.includes("মুছে")
   );
 }
 
+/*
+ * IMPORTANT:
+ *
+ * Do NOT simply search for "update", "edit",
+ * "add" anywhere in a long user message.
+ *
+ * That caused the old bug where a code-edit
+ * instruction containing the word "update"
+ * accidentally updated bby.js.
+ */
+
 function wantsWrite(
   text: string
 ) {
   const value =
-    normalize(text);
+    normalize(
+      stripCodeBlocks(text)
+    );
 
   return (
-    value.includes("add") ||
+    /\b(?:add|create|make|write)\s+(?:a\s+)?(?:new\s+)?file\b/i.test(
+      value
+    ) ||
+    /\b(?:create|make|add|write)\b.*\bfile\b/i.test(
+      value
+    ) ||
     value.includes("create file") ||
     value.includes("make file") ||
-    value.includes("write") ||
-    value.includes("update") ||
-    value.includes("edit") ||
-    value.includes("যোগ") ||
-    value.includes("বানাও")
+    value.includes("file banao") ||
+    value.includes("file বানাও") ||
+    value.includes("file add koro") ||
+    value.includes("file update koro") ||
+    value.includes("যোগ করো") ||
+    value.includes("নতুন file")
   );
 }
 
@@ -413,17 +574,17 @@ function hasConfirmation(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * CONTENT EXTRACTION
- * ---------------------------------------------------------
- *
- * Uses [\s\S] instead of the RegExp "s" flag
- * so ES2017 TypeScript builds work.
+ * =========================================================
  */
 
 function extractContent(
   text: string
 ) {
+  const clean =
+    stripCodeBlocks(text);
+
   const patterns = [
     /\s+-\s+([\s\S]+)$/,
 
@@ -438,7 +599,7 @@ function extractContent(
     const pattern of patterns
   ) {
     const match =
-      text.match(pattern);
+      clean.match(pattern);
 
     if (
       match?.[1]?.trim()
@@ -451,9 +612,9 @@ function extractContent(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * EMPTY REPOSITORY FIRST COMMIT
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 async function createFirstFile(
@@ -472,10 +633,6 @@ async function createFirstFile(
   const branch =
     repository.default_branch ||
     "main";
-
-  /*
-   * Create blob
-   */
 
   const blob =
     await githubRequest(
@@ -496,10 +653,6 @@ async function createFirstFile(
         })
       }
     );
-
-  /*
-   * Create tree
-   */
 
   const tree =
     await githubRequest(
@@ -527,10 +680,6 @@ async function createFirstFile(
       }
     );
 
-  /*
-   * Create commit
-   */
-
   const commit =
     await githubRequest(
       `/repos/${encodeURIComponent(
@@ -550,10 +699,6 @@ async function createFirstFile(
         })
       }
     );
-
-  /*
-   * Create first branch reference
-   */
 
   const ref =
     await githubRequest(
@@ -584,9 +729,9 @@ async function createFirstFile(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * SMART FILE WRITE
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 async function createFileSmart(
@@ -601,15 +746,6 @@ async function createFileSmart(
       owner,
       repo
     );
-
-  /*
-   * Empty repository:
-   *
-   * GitHub may still expose a default branch
-   * name even though there are no commits.
-   *
-   * Therefore size === 0 is used.
-   */
 
   if (
     Number(
@@ -635,9 +771,9 @@ async function createFileSmart(
 }
 
 /*
- * ---------------------------------------------------------
- * REPOSITORY-ONLY CONTEXT HELPERS
- * ---------------------------------------------------------
+ * =========================================================
+ * MULTI-TURN CONTEXT
+ * =========================================================
  */
 
 function isPossibleRepoName(
@@ -667,6 +803,30 @@ function findPreviousFileRequest(
     const content =
       message.content.trim();
 
+    /*
+     * Do not parse code-edit messages as
+     * previous GitHub commands.
+     */
+    if (
+      isCodeEditRequest(content)
+    ) {
+      continue;
+    }
+
+    const createRequest =
+      extractCreateFileRequest(
+        content
+      );
+
+    if (createRequest) {
+      return {
+        repo:
+          createRequest.repo,
+        path:
+          createRequest.path
+      };
+    }
+
     const repoPath =
       extractRepoAndPath(
         content
@@ -693,18 +853,26 @@ function findPreviousFileRequest(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * DIRECT ACTION ENGINE
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 async function directAction(
   text: string
 ) {
   /*
-   * Greeting must be handled before
-   * any GitHub API request.
+   * Code-edit requests must NEVER enter
+   * this simple-operation engine.
    */
+
+  if (
+    isCodeEditRequest(text)
+  ) {
+    return {
+      handled: false
+    };
+  }
 
   if (
     isGreeting(text)
@@ -715,10 +883,6 @@ async function directAction(
         "Hello! 👋 I'm your GitHub AI Manager. I can manage repositories, files, branches, commits and pull requests."
     };
   }
-
-  /*
-   * Owner is automatically detected.
-   */
 
   const owner =
     await getOwner();
@@ -784,6 +948,57 @@ async function directAction(
       refreshRepos: true,
       message:
         `✅ Created public repository **${repo.name}**.\n\n${repo.html_url || ""}`
+    };
+  }
+
+  /*
+   * -------------------------------------------------------
+   * CREATE NEW FILE
+   * -------------------------------------------------------
+   *
+   * This MUST happen before generic repo+path
+   * handling because:
+   *
+   * Banao repository te new file banao games.js
+   *
+   * does not use "theke/from".
+   */
+
+  const createFileRequest =
+    extractCreateFileRequest(
+      text
+    );
+
+  if (
+    createFileRequest
+  ) {
+    const {
+      repo,
+      path,
+      content
+    } = createFileRequest;
+
+    if (!content) {
+      return {
+        handled: true,
+        message:
+          `I found **${path}**, but no file content was provided.`
+      };
+    }
+
+    const result =
+      await createFileSmart(
+        owner,
+        repo,
+        path,
+        content,
+        `Add ${path}`
+      );
+
+    return {
+      handled: true,
+      message:
+        `✅ **${path}** was added/updated in **${repo}**.\n\nCommit: \`${result.commit?.sha || "created"}\``
     };
   }
 
@@ -869,7 +1084,7 @@ async function directAction(
     }
 
     /*
-     * READ / FIND FILE
+     * READ FILE
      */
 
     if (
@@ -920,12 +1135,8 @@ async function directAction(
 
   /*
    * -------------------------------------------------------
-   * FILE SEARCH WITHOUT EXACT PATH
+   * FILE SEARCH WITHOUT EXACT REPO + PATH PATTERN
    * -------------------------------------------------------
-   *
-   * Example:
-   *
-   * Bayejid-pro repo theke bby.js dao
    */
 
   const fileName =
@@ -936,7 +1147,7 @@ async function directAction(
     wantsRead(text)
   ) {
     const repoMatch =
-      text.match(
+      stripCodeBlocks(text).match(
         /["'`]?([a-zA-Z0-9_.-]+)["'`]?\s+(?:repo|repository)?\s*(?:theke|from|থেকে)/i
       );
 
@@ -993,7 +1204,7 @@ async function directAction(
    */
 
   const deleteRepoMatch =
-    text.match(
+    stripCodeBlocks(text).match(
       /(?:delete|remove)\s+(?:repo(?:sitory)?\s+)?["'`]?([a-zA-Z0-9_.-]+)["'`]?/i
     );
 
@@ -1033,7 +1244,7 @@ async function directAction(
    */
 
   const branchMatch =
-    text.match(
+    stripCodeBlocks(text).match(
       /(?:create|make|new)\s+branch\s+["'`]?([a-zA-Z0-9_.\/-]+)["'`]?\s+(?:from|on)\s+["'`]?([a-zA-Z0-9_.\/-]+)["'`]?.*?(?:repo|repository)\s+["'`]?([a-zA-Z0-9_.-]+)["'`]?/i
     );
 
@@ -1068,9 +1279,9 @@ async function directAction(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * GROQ TOOLS
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 const aiTools = [
@@ -1104,7 +1315,7 @@ const aiTools = [
     function: {
       name: "read_file",
       description:
-        "Read a GitHub file when AI needs the contents for reasoning.",
+        "Read a GitHub file before modifying it or when its contents are needed.",
       parameters: {
         type: "object",
         properties: {
@@ -1136,7 +1347,7 @@ const aiTools = [
     function: {
       name: "update_file",
       description:
-        "Update a GitHub file after AI has generated or fixed its content.",
+        "Update an existing GitHub file or create a file when appropriate. Always read the existing file first when modifying existing code.",
       parameters: {
         type: "object",
         properties: {
@@ -1176,7 +1387,7 @@ const aiTools = [
     function: {
       name: "create_branch",
       description:
-        "Create a GitHub branch when AI determines a branch is needed.",
+        "Create a GitHub branch when a branch operation is required.",
       parameters: {
         type: "object",
         properties: {
@@ -1246,43 +1457,53 @@ const aiTools = [
 ];
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * AI TOOL EXECUTION
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 async function executeAiTool(
   name: string,
   args: Record<string, any>
 ) {
+  /*
+   * Always prefer the connected GitHub account
+   * when owner is missing or incorrect.
+   */
+
+  const connectedOwner =
+    await getOwner();
+
+  const owner =
+    connectedOwner;
+
   switch (name) {
     case "get_repository":
       return getRepo(
-        args.owner,
+        owner,
         args.repo
       );
 
     case "read_file":
       return readFile(
-        args.owner,
+        owner,
         args.repo,
         args.path,
         args.ref
       );
 
     case "update_file":
-      return createOrUpdateFile(
-        args.owner,
+      return createFileSmart(
+        owner,
         args.repo,
         args.path,
         args.content,
-        args.message,
-        args.branch
+        args.message
       );
 
     case "create_branch":
       return createBranch(
-        args.owner,
+        owner,
         args.repo,
         args.branch,
         args.from
@@ -1290,7 +1511,7 @@ async function executeAiTool(
 
     case "create_pull_request":
       return createPullRequest(
-        args.owner,
+        owner,
         args.repo,
         args.title,
         args.head,
@@ -1306,9 +1527,9 @@ async function executeAiTool(
 }
 
 /*
- * ---------------------------------------------------------
+ * =========================================================
  * MAIN AGENT
- * ---------------------------------------------------------
+ * =========================================================
  */
 
 export async function runGitHubAgent(
@@ -1342,54 +1563,66 @@ export async function runGitHubAgent(
 
   /*
    * -------------------------------------------------------
-   * DIRECT MULTI-TURN FILE CONTEXT
+   * CODE EDIT REQUEST
    * -------------------------------------------------------
    *
-   * Example:
+   * IMPORTANT:
    *
-   * User:
-   * Github theke Bayejid-pro repo theke bby.js dao
+   * This check happens BEFORE directAction().
    *
-   * This is handled immediately.
+   * Therefore a message such as:
    *
-   * Also supports:
+   * "github-agent.ts-এ এই function replace করো..."
    *
-   * User:
-   * Bayejid-pro
+   * cannot accidentally trigger:
    *
-   * User:
-   * bby.js
+   * Bayejid-pro/bby.js
+   */
+
+  const codeEditRequest =
+    isCodeEditRequest(text);
+
+  /*
+   * -------------------------------------------------------
+   * DIRECT MULTI-TURN CONTEXT
+   * -------------------------------------------------------
    */
 
   let effectiveText =
     text;
 
-  const previousRequest =
-    findPreviousFileRequest(
-      userMessages.slice(
-        0,
-        -1
-      )
-    );
-
-  /*
-   * Latest message is only a repo name.
-   *
-   * Example:
-   *
-   * Previous:
-   * bby.js dao
-   *
-   * Latest:
-   * Bayejid-pro
-   */
-
   if (
-    isPossibleRepoName(text) &&
-    previousRequest?.path
+    !codeEditRequest
   ) {
-    effectiveText =
-      `${text} repo theke ${previousRequest.path} dao`;
+    const previousRequest =
+      findPreviousFileRequest(
+        userMessages.slice(
+          0,
+          -1
+        )
+      );
+
+    /*
+     * If the latest message is a repo name
+     * and the previous request contained a file,
+     * continue the previous task.
+     *
+     * Example:
+     *
+     * User:
+     * bby.js dao
+     *
+     * User:
+     * Bayejid-pro
+     */
+
+    if (
+      isPossibleRepoName(text) &&
+      previousRequest?.path
+    ) {
+      effectiveText =
+        `${text} repo theke ${previousRequest.path} dao`;
+    }
   }
 
   /*
@@ -1397,35 +1630,30 @@ export async function runGitHubAgent(
    * DIRECT ACTION FIRST
    * -------------------------------------------------------
    *
-   * No Groq for:
-   *
-   * - greetings
-   * - list repos
-   * - create repo
-   * - file search
-   * - file read
-   * - simple file write
-   * - simple deletion
-   * - branch creation
+   * Code-edit tasks intentionally skip this.
    */
 
-  const direct =
-    await directAction(
-      effectiveText
-    );
-
   if (
-    direct.handled
+    !codeEditRequest
   ) {
-    return {
-      message:
-        direct.message ||
-        "Done.",
-      refreshRepos:
-        Boolean(
-          direct.refreshRepos
-        )
-    };
+    const direct =
+      await directAction(
+        effectiveText
+      );
+
+    if (
+      direct.handled
+    ) {
+      return {
+        message:
+          direct.message ||
+          "Done.",
+        refreshRepos:
+          Boolean(
+            direct.refreshRepos
+          )
+      };
+    }
   }
 
   /*
@@ -1434,6 +1662,9 @@ export async function runGitHubAgent(
    * -------------------------------------------------------
    */
 
+  const connectedOwner =
+    await getOwner();
+
   const conversation:
     AgentMessage[] = [
       {
@@ -1441,9 +1672,12 @@ export async function runGitHubAgent(
         content: `
 You are an advanced GitHub Manager AI.
 
-The server already handles simple GitHub operations directly.
+Connected GitHub owner:
+${connectedOwner}
 
-Use your reasoning for:
+The server handles simple GitHub operations directly.
+
+Use reasoning for:
 - debugging
 - explaining code
 - fixing code
@@ -1451,17 +1685,43 @@ Use your reasoning for:
 - architecture
 - complex repository tasks
 - multi-step development tasks
+- editing existing source files
 
-Rules:
-1. Never claim an action succeeded unless a tool succeeded.
-2. Preserve existing code unless replacement is explicitly requested.
-3. Read existing code before changing it.
-4. Never invent repository names or file paths.
-5. Keep responses concise.
-6. If a user asks for a simple file read, do not unnecessarily use AI.
-7. If a GitHub operation can be safely performed directly, use the provided tool.
-8. The connected GitHub owner can be discovered automatically.
-9. Never ask the user for the GitHub owner when the server can detect it.
+IMPORTANT CODE-EDIT RULES:
+
+1. If the user asks to modify, replace, fix, refactor, or update code inside a file, treat it as a CODE EDIT TASK.
+
+2. For a code-edit task:
+   - identify the actual repository and target file from the user's natural-language request
+   - read the target file first
+   - apply the requested changes
+   - preserve unrelated existing code
+   - update the same target file
+   - use update_file
+   - only report success after update_file succeeds
+
+3. NEVER treat examples inside code snippets, comments, regex examples, documentation, or quoted text as the user's actual GitHub command.
+
+4. For example, if a user asks you to modify github-agent.ts and their replacement code contains:
+   "Bayejid-pro repo theke bby.js"
+   that is an example inside the code and MUST NOT cause a bby.js operation.
+
+5. Never invent repository names or file paths.
+
+6. The connected GitHub owner is already known:
+   ${connectedOwner}
+
+7. Never ask the user for the GitHub owner unless there is a genuine authentication problem.
+
+8. Never claim a GitHub action succeeded unless the corresponding tool returned successfully.
+
+9. If a tool returns an error, report the actual error instead of claiming success.
+
+10. When updating code, read the existing file before replacing it unless the user explicitly says the file is completely new.
+
+11. Keep responses concise.
+
+12. Do not unnecessarily use Groq for simple read/list/create-file operations that the server can handle directly.
 `
       },
       ...messages
@@ -1494,10 +1754,6 @@ Rules:
         "Groq returned an empty response."
       );
     }
-
-    /*
-     * Assistant tool-call message.
-     */
 
     conversation.push({
       role: "assistant",
